@@ -1,0 +1,31 @@
+From: xxlloydzz <xxlloydzz@users.noreply.github.com>
+Subject: [PATCH] topaz-0952: TopazModem: restore <sys/vnode.h> for 0951
+
+Companion to 0951. The root-vnode wait in topaz_soc_map() uses
+vfs_rootvnode(), vnode_put() and NULLVP, which live in <sys/vnode.h>.
+Patch 0113 included that header, but 0115 removed it (along with the
+vnode-based firmware file reads) when firmware loading moved to the
+modem_a partition, so 0951 no longer compiles:
+
+  TopazModem.cpp: error: use of undeclared identifier 'vfs_rootvnode'
+  TopazModem.cpp: error: use of undeclared identifier 'NULLVP'
+  TopazModem.cpp: error: use of undeclared identifier 'vnode_put'
+
+Put the include back. Nothing else changes.
+
+---
+ iokit/Kernel/arm/TopazModem.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -20,7 +20,8 @@
+ #include <kern/thread.h>
+ #include <pexpert/pexpert.h>
+ #include <libkern/crc.h>
+ #include <sys/param.h>
+ #include <sys/errno.h>
++#include <sys/vnode.h>
+ 
+ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
