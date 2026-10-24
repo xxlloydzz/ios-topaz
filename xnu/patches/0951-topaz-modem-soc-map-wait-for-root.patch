@@ -1,0 +1,59 @@
+From: xxlloydzz <xxlloydzz@users.noreply.github.com>
+Subject: [PATCH] topaz-0951: soc_map: wait for the root vnode before polling
+ sweet_ufs
+
+Usability fix (xxlloydzz, mentored by Ma) for a unit-specific modem=1
+boot wedge. On this topaz unit (4 GB / 128 GB) every modem=1 boot
+stalls before the root mount completes: no ring flush, no BSD root,
+frozen early console text. modem=0 boots fine, and the only delta is
+the modem thread.
+
+topaz_soc_map() polls sweet_ufs_read_part("modem_a") in an EAGAIN loop
+from the moment the modem thread starts. The poll is meant to wait
+until "sweet_ufs comes up with the root device", but a read that lands
+while sweet_ufs is still probing can wedge the driver on this unit,
+so the root mount never finishes. (The poll's sleeps already happen
+under the soc_map once-lock, so waiting there is nothing new.)
+
+Gate the poll on the root vnode: root mounted means sweet_ufs is
+fully up, which is exactly what the poll waits for. vfs_rootvnode()
+is what this file's original (0113) wait loop used. With root up,
+behaviour below is unchanged; if root never appears the poll still
+runs after the timeout, as before.
+
+---
+ iokit/Kernel/arm/TopazModem.cpp | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/iokit/Kernel/arm/TopazModem.cpp b/iokit/Kernel/arm/TopazModem.cpp
+--- a/iokit/Kernel/arm/TopazModem.cpp
++++ b/iokit/Kernel/arm/TopazModem.cpp
+@@ -630,6 +630,28 @@ topaz_soc_map(void)
+ 	state = -1;
+ 	soc_lock = IOLockAlloc();
+ 	(void)PE_parse_boot_argn("modem_part", fw_part, sizeof(fw_part));
++	/* usability fix (xxlloydzz + Ma): on this unit, modem=1 boots wedge
++	 * before the root mount completes. The partition poll below starts
++	 * as soon as the modem thread runs, and a sweet_ufs_read_part()
++	 * that lands while sweet_ufs is still probing can wedge the
++	 * driver, so the root mount never finishes (no ring flush, no
++	 * BSD root). Root mounted means sweet_ufs is fully up -- which is
++	 * what the poll is waiting for -- so gate the poll on the root
++	 * vnode first. With root up, behaviour below is unchanged. */
++	{
++		int i;
++		for (i = 0; i < 300; i++) {
++			vnode_t root = vfs_rootvnode();
++			if (root != NULLVP) {
++				vnode_put(root);
++				break;
++			}
++			IOSleep(1000);
++		}
++		if (i == 300) {
++			LOG("soc_map: root vnode never appeared; polling anyway");
++		}
++	}
+ 	uint8_t probe[16];
+ 	int err = EAGAIN;
+ 	for (int i = 0; i < 120 && err == EAGAIN; i++) {
